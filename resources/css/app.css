@@ -1,0 +1,11 @@
+@import 'tailwindcss';
+
+/* Module views live outside resources/, so Tailwind has to be told where to
+   look for classes. One line per source root, the same convention modules
+   follow everywhere else. */
+@source '../../app/Modules/*/Resources/views/**/*.blade.php';
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+
+@theme {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+}

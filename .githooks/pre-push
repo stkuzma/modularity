@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# Runs the same gates CI runs, so a red build is caught before it is pushed.
+# Install with: composer hooks
+#
+set -euo pipefail
+
+echo "pre-push: style, static analysis, tests"
+
+if command -v docker >/dev/null 2>&1 && ! php -r 'exit(PHP_VERSION_ID >= 80500 ? 0 : 1);' 2>/dev/null; then
+    # Local PHP is older than the version this project targets.
+    run() { docker run --rm -v "$PWD":/app -w /app php:8.5-cli php "$@"; }
+else
+    run() { php "$@"; }
+fi
+
+run vendor/bin/pint --test
+run vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+run vendor/bin/phpunit
+
+echo "pre-push: ok"

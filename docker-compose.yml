@@ -1,0 +1,78 @@
+# Blue-green on one machine.
+#
+# Both colours exist at all times. The idle one is not dead weight: it is the
+# rollback target, still running the previous image, which is what makes a
+# rollback a config reload rather than a rebuild.
+#
+# deploy.sh moves the arrow. Nothing else does.
+
+services:
+  edge:
+    image: nginx:1.27-alpine
+    ports:
+      - "${APP_PORT:-8080}:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/site.conf:/etc/nginx/conf.d/site.conf:ro
+      - ./docker/nginx/upstream.conf:/etc/nginx/conf.d/upstream.conf:ro
+      - public:/srv/public:ro
+    depends_on:
+      - app_blue
+      - app_green
+    restart: unless-stopped
+
+  app_blue:
+    build:
+      context: .
+      target: runtime
+    image: modularity:${BLUE_TAG:-local}
+    env_file: .env
+    environment:
+      DB_HOST: database
+      APP_COLOUR: blue
+    volumes:
+      - public:/srv/public
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app_green:
+    build:
+      context: .
+      target: runtime
+    image: modularity:${GREEN_TAG:-local}
+    env_file: .env
+    environment:
+      DB_HOST: database
+      APP_COLOUR: green
+    volumes:
+      - public:/srv/public
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  database:
+    image: postgres:17-alpine
+    # Bound to the loopback interface, so a database client on this machine can
+    # reach it and nothing on the network can. Override the host port with
+    # DB_HOST_PORT when 5432 is already taken.
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-modularity}
+      POSTGRES_USER: ${DB_USERNAME:-modularity}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-modularity}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  database:
+  public:

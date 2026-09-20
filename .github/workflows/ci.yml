@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Style, analysis, tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, dom, xml, pdo_sqlite, sqlite3
+          coverage: pcov
+
+      - name: Install dependencies
+        uses: ramsey/composer-install@v3
+
+      - name: Check code style
+        run: composer lint
+
+      - name: Run static analysis
+        run: composer analyse
+
+      - name: Run tests and gate coverage
+        run: composer test:coverage
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: error
+
+  # The suite runs on SQLite for speed, which once hid a column typed json
+  # holding ciphertext: SQLite does not validate the type and Postgres does.
+  # The engine the application actually ships on gets its own run.
+  postgres:
+    name: Tests on PostgreSQL
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: modularity_test
+          POSTGRES_USER: modularity
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U modularity"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: modularity_test
+      DB_USERNAME: modularity
+      DB_PASSWORD: secret
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, dom, xml, pdo_pgsql
+          coverage: none
+
+      - uses: ramsey/composer-install@v3
+
+      - run: composer test
+
+  image:
+    name: Build image
+    needs: quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runtime
+          push: false
+          load: true
+          tags: modularity:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The image is only useful if it boots. Nothing here needs a database:
+      # the check is that the application can be constructed and its routes
+      # resolved from the compiled autoloader.
+      - name: Smoke test the image
+        run: |
+          docker run --rm \
+            -e APP_KEY=base64:$(head -c32 /dev/urandom | base64) \
+            -e DB_CONNECTION=sqlite -e DB_DATABASE=:memory: \
+            modularity:${{ github.sha }} \
+            php artisan route:list --json > /dev/null
